@@ -16,9 +16,9 @@ from bs4 import BeautifulSoup
 # ==========================
 
 # Default search configuration. You can change these or pass values via CLI.
-DEFAULT_SEARCH_TERMS = ["security engineer", "junior security", "automation engineer", "technical support", "mac support"]
-DEFAULT_LOCATION = "sacramento, CA"
-DEFAULT_MAX_PAGES = 10  # Number of result pages per search to fetch (Indeed paginates)
+DEFAULT_SEARCH_TERMS = ["security engineer", "junior security", "automation engineer"]
+DEFAULT_LOCATION = "remote"
+DEFAULT_MAX_PAGES = 2  # Number of result pages per search per source
 
 OUTPUT_FILE = "jobs.json"
 
@@ -41,31 +41,12 @@ class JobPosting:
 
 
 # ==========================
-# SCRAPER: INDEED
+# HTTP HELPERS
 # ==========================
-
-def build_indeed_url(query: str, location: str, start: int = 0) -> str:
-    """
-    Build a basic Indeed search URL.
-
-    Note:
-    - This uses the public search page, not any private API.
-    - Markup can and does change; selectors below may need updates over time.
-    """
-    base = "https://www.indeed.com/jobs"
-    params = {
-        "q": query,
-        "l": location,
-        "start": str(start),
-    }
-    # We manually build the query string to keep dependencies minimal.
-    query_string = "&".join(f"{k}={requests.utils.quote(v)}" for k, v in params.items())
-    return f"{base}?{query_string}"
-
 
 def fetch_page(url: str) -> str:
     """
-    Fetch a single page of HTML from a public job listing URL.
+    Fetch a single page of HTML from a public URL.
     """
     headers = {
         "User-Agent": (
@@ -78,18 +59,34 @@ def fetch_page(url: str) -> str:
     return resp.text
 
 
+# ==========================
+# SCRAPER: INDEED
+# ==========================
+
+def build_indeed_url(query: str, location: str, start: int = 0) -> str:
+    """
+    Build a basic Indeed search URL.
+    """
+    base = "https://www.indeed.com/jobs"
+    params = {
+        "q": query,
+        "l": location,
+        "start": str(start),
+    }
+    query_string = "&".join(f"{k}={requests.utils.quote(v)}" for k, v in params.items())
+    return f"{base}?{query_string}"
+
+
 def parse_indeed_jobs(html: str, search_term: str) -> List[JobPosting]:
     """
     Parse Indeed job cards from a search result page.
 
-    IMPORTANT:
-    - Indeed frequently changes its CSS class names and structure.
-    - If this stops working, inspect the HTML in your browser (View Source or DevTools)
-      and adjust selectors accordingly.
+    NOTE:
+    - Indeed frequently changes its HTML.
+    - If this breaks, inspect the HTML and update selectors.
     """
     soup = BeautifulSoup(html, "html.parser")
 
-    # This selector may need updates; it's a generic "job card" style container.
     job_cards = soup.select("div.job_seen_beacon") or soup.select("div.jobsearch-SerpJobCard")
 
     postings: List[JobPosting] = []
@@ -171,21 +168,216 @@ def search_indeed_for_term(term: str, location: str, max_pages: int) -> List[Job
         try:
             html = fetch_page(url)
         except requests.HTTPError as e:
-            print(f"HTTP error fetching {url}: {e}")
+            print(f"    HTTP error fetching {url}: {e}")
             break
         except requests.RequestException as e:
-            print(f"Request error fetching {url}: {e}")
+            print(f"    Request error fetching {url}: {e}")
             break
 
         page_postings = parse_indeed_jobs(html, term)
         print(f"         Found {len(page_postings)} job(s) on this page.")
         if not page_postings:
-            # No more jobs or structure changed
             break
 
         all_postings.extend(page_postings)
+        time.sleep(2)
 
-        # Be polite: pause between requests
+    return all_postings
+
+
+# ==========================
+# SCRAPER: GOOGLE SEARCH (JOBS VIA SERP)
+# ==========================
+
+def build_google_jobs_url(query: str, location: str, start: int = 0) -> str:
+    """
+    Build a Google search URL aimed at job listings.
+
+    We are scraping the public search results, not any internal API.
+    """
+    base = "https://www.google.com/search"
+    q = f"{query} jobs {location}"
+    params = {
+        "q": q,
+        "start": str(start),
+    }
+    query_string = "&".join(f"{k}={requests.utils.quote(v)}" for k, v in params.items())
+    return f"{base}?{query_string}"
+
+
+def parse_google_jobs(html: str, search_term: str) -> List[JobPosting]:
+    """
+    Parse Google SERP results for job-like entries.
+
+    This is heuristic and may need adjustments as Google changes markup.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    # Generic search result containers
+    results = soup.select("div.g")
+
+    postings: List[JobPosting] = []
+    scraped_at = datetime.utcnow().isoformat() + "Z"
+
+    for r in results:
+        link = r.select_one("a")
+        title_el = r.select_one("h3")
+        snippet_el = r.select_one("div.VwiC3b") or r.select_one("span.aCOpRe")
+
+        if not link or not title_el:
+            continue
+
+        url = link.get("href", "")
+        title = title_el.get_text(strip=True)
+        summary = snippet_el.get_text(" ", strip=True) if snippet_el else ""
+
+        # These SERP results often don't expose company/location cleanly,
+        # but the target page will. We'll mark them unknown here.
+        posting = JobPosting(
+            source="google_serp",
+            title=title,
+            company="",
+            location="",
+            url=url,
+            summary=summary,
+            posted_raw="",
+            scraped_at=scraped_at,
+            search_term=search_term,
+        )
+        postings.append(posting)
+
+    return postings
+
+
+def search_google_jobs_for_term(term: str, location: str, max_pages: int) -> List[JobPosting]:
+    """
+    Use Google search as a meta-job finder.
+
+    This will return URLs that often point to LinkedIn, Indeed, company career pages, etc.
+    """
+    all_postings: List[JobPosting] = []
+
+    for page in range(max_pages):
+        start = page * 10  # Google paginates results in steps of 10
+        url = build_google_jobs_url(term, location, start=start)
+        print(f"[Google] Fetching page {page + 1}/{max_pages} for '{term}' @ '{location}'")
+        print(f"         URL: {url}")
+
+        try:
+            html = fetch_page(url)
+        except requests.HTTPError as e:
+            print(f"    HTTP error fetching {url}: {e}")
+            break
+        except requests.RequestException as e:
+            print(f"    Request error fetching {url}: {e}")
+            break
+
+        page_postings = parse_google_jobs(html, term)
+        print(f"         Found {len(page_postings)} result(s) on this page.")
+        if not page_postings:
+            break
+
+        all_postings.extend(page_postings)
+        time.sleep(2)
+
+    return all_postings
+
+
+# ==========================
+# SCRAPER: LINKEDIN PUBLIC JOB SEARCH
+# ==========================
+
+def build_linkedin_url(query: str, location: str, page: int = 0) -> str:
+    """
+    Build a LinkedIn public job search URL.
+
+    This uses the public job search page (no login), which LinkedIn exposes for SEO.
+    """
+    base = "https://www.linkedin.com/jobs/search"
+    params = {
+        "keywords": query,
+        "location": location,
+        "position": "1",
+        "pageNum": str(page),
+    }
+    query_string = "&".join(f"{k}={requests.utils.quote(v)}" for k, v in params.items())
+    return f"{base}?{query_string}"
+
+
+def parse_linkedin_jobs(html: str, search_term: str) -> List[JobPosting]:
+    """
+    Parse LinkedIn public job search results.
+
+    NOTE:
+    - Markup may change; selectors may need updates.
+    - This does NOT log in or bypass any protections.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    cards = soup.select("div.base-card")
+
+    postings: List[JobPosting] = []
+    scraped_at = datetime.utcnow().isoformat() + "Z"
+
+    for card in cards:
+        link_el = card.select_one("a.base-card__full-link")
+        if not link_el:
+            continue
+
+        url = link_el.get("href", "").split("?")[0]
+
+        title_el = card.select_one("h3.base-search-card__title")
+        company_el = card.select_one("h4.base-search-card__subtitle")
+        location_el = card.select_one("span.job-search-card__location")
+        summary_el = card.select_one("p.base-search-card__snippet")
+        posted_el = card.select_one("time")
+
+        title = title_el.get_text(strip=True) if title_el else ""
+        company = company_el.get_text(strip=True) if company_el else ""
+        location = location_el.get_text(strip=True) if location_el else ""
+        summary = summary_el.get_text(strip=True) if summary_el else ""
+        posted_raw = posted_el.get_text(strip=True) if posted_el else ""
+
+        posting = JobPosting(
+            source="linkedin",
+            title=title,
+            company=company,
+            location=location,
+            url=url,
+            summary=summary,
+            posted_raw=posted_raw,
+            scraped_at=scraped_at,
+            search_term=search_term,
+        )
+        postings.append(posting)
+
+    return postings
+
+
+def search_linkedin_for_term(term: str, location: str, max_pages: int) -> List[JobPosting]:
+    """
+    Search LinkedIn public job pages for a given term and location.
+    """
+    all_postings: List[JobPosting] = []
+
+    for page in range(max_pages):
+        url = build_linkedin_url(term, location, page=page)
+        print(f"[LinkedIn] Fetching page {page + 1}/{max_pages} for '{term}' @ '{location}'")
+        print(f"           URL: {url}")
+
+        try:
+            html = fetch_page(url)
+        except requests.HTTPError as e:
+            print(f"    HTTP error fetching {url}: {e}")
+            break
+        except requests.RequestException as e:
+            print(f"    Request error fetching {url}: {e}")
+            break
+
+        page_postings = parse_linkedin_jobs(html, term)
+        print(f"           Found {len(page_postings)} job(s) on this page.")
+        if not page_postings:
+            break
+
+        all_postings.extend(page_postings)
         time.sleep(2)
 
     return all_postings
@@ -234,7 +426,6 @@ def main() -> None:
     If no arguments, uses DEFAULT_SEARCH_TERMS and DEFAULT_LOCATION.
     """
     if len(sys.argv) >= 2:
-        # Single custom search term
         term = sys.argv[1]
         location = sys.argv[2] if len(sys.argv) >= 3 else DEFAULT_LOCATION
         try:
@@ -249,15 +440,25 @@ def main() -> None:
         search_location = DEFAULT_LOCATION
         max_pages = DEFAULT_MAX_PAGES
 
-    print("=== Job Scraper: Indeed (MVP) ===")
+    print("=== Job Scraper: Indeed + Google + LinkedIn (MVP) ===")
     print(f"Search terms: {search_terms}")
     print(f"Location: {search_location}")
-    print(f"Max pages per term: {max_pages}\n")
+    print(f"Max pages per term per source: {max_pages}\n")
 
     all_jobs: List[JobPosting] = []
+
     for term in search_terms:
-        jobs = search_indeed_for_term(term, search_location, max_pages)
-        all_jobs.extend(jobs)
+        # Indeed
+        indeed_jobs = search_indeed_for_term(term, search_location, max_pages)
+        all_jobs.extend(indeed_jobs)
+
+        # Google SERP
+        google_jobs = search_google_jobs_for_term(term, search_location, max_pages)
+        all_jobs.extend(google_jobs)
+
+        # LinkedIn public
+        linkedin_jobs = search_linkedin_for_term(term, search_location, max_pages)
+        all_jobs.extend(linkedin_jobs)
 
     unique_jobs = deduplicate_jobs(all_jobs)
     save_jobs_to_file(unique_jobs, OUTPUT_FILE)
