@@ -1,0 +1,29 @@
+{
+  "sources": [
+    {
+      "id": "greenhouse-xai",
+      "kind": "greenhouse",
+      "board": "xai",
+      "employer": "SpaceXAI / xAI",
+      "url": "https://boards-api.greenhouse.io/v1/boards/xai/jobs?content=true",
+      "complete_snapshot": true
+    },
+    {
+      "id": "greenhouse-remotasks",
+      "kind": "greenhouse",
+      "board": "remotasks",
+      "employer": "Outlier / Remotasks",
+      "url": "https://boards-api.greenhouse.io/v1/boards/remotasks/jobs?content=true",
+      "complete_snapshot": true
+    },
+    {
+      "id": "micro1-opportunities",
+      "kind": "micro1_index",
+      "employer": "micro1",
+      "url": "https://www.micro1.ai/experts/opportunities",
+      "complete_snapshot": false,
+      "execution": "browser_required",
+      "reason": "Live HTML check returned no job cards; the rendered page requires a separate browser check. Do not count this source as monitored by the HTTP worker."
+    }
+  ]
+}
