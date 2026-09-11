@@ -2,8 +2,8 @@
 
 A small, credential-free monitor for public AI and engineering vacancies. It
 retains first-seen times, posting labels, listing changes and source failures.
-The original `scrape_jobs.py` remains a separate legacy scraper; the scheduled
-workflow runs `watch_jobs.py` and does not invoke Selenium or sign into sites.
+The original `scrape_jobs.py` remains a separate legacy scraper. Run
+`watch_jobs.py` manually; it does not invoke Selenium or sign into sites.
 
 ## Run
 
@@ -21,24 +21,20 @@ check covers it. These sources supplement broader searches; they are not
 exhaustive coverage of all platforms. Add sources only after verifying their
 public interface and parser behavior.
 
-## Schedule and durable output
+## GitHub Actions disabled; manual output
 
-The GitHub Actions workflow checks at minutes 7, 22, 37 and 52 each hour. Pushes
-that change the monitor on `main` also run it. Enable Actions for this repository
-if it is disabled. The first successful hosted run is the deployment check.
+GitHub Actions automation was disabled at the owner's request on September 11,
+2026. The former workflow is archived at
+`.github/disabled-workflows/watch-jobs.yml`, outside GitHub's executable workflow
+directory. There are no active workflow files. Do not restore or re-enable
+Actions without the owner's explicit request.
 
-The workflow commits titles, locations, URLs, timestamps and description hashes
-to `data/public_jobs.json`; it does not republish full job descriptions. State is
-loaded again on the next run, with jobs keyed by employer/ATS posting ID.
-Unchanged observations do not generate another new-job event. Read `last_run`
-and `sources` before trusting the feed: a failed request preserves previous jobs
-and records an error, rather than reporting no vacancies. A failed run still
-commits its coverage evidence when the runner has repository write permission.
-
-GitHub schedules can be delayed or dropped under load; this is periodic polling,
-not a guaranteed real-time feed. Scheduled workflows run on the default branch
-and can be disabled after 60 days without repository activity. See
-[GitHub schedule behavior](https://docs.github.com/actions/using-workflows/events-that-trigger-workflows#schedule).
+The manual command above writes public listing observations and source coverage
+to `data/public_jobs.json` locally; it does not automatically commit or publish
+the output. State is loaded again on the next manual run, with jobs keyed by
+employer/ATS posting ID. Unchanged observations do not generate another new-job
+event. Read `last_run` and `sources` before trusting the feed: a failed request
+preserves previous jobs and records an error, rather than reporting no vacancies.
 
 ## Interpreting observations
 
